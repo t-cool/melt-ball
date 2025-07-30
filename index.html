@@ -1,0 +1,485 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>紅蓮の水 - Japanese Water Art</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: #0a0505;
+            cursor: pointer;
+            font-family: "游明朝", YuMincho, "ヒラギノ明朝 ProN W3", serif;
+        }
+        #info {
+            position: absolute;
+            top: 30px;
+            left: 30px;
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 16px;
+            letter-spacing: 0.2em;
+            writing-mode: vertical-rl;
+            text-orientation: upright;
+            background: rgba(0,0,0,0.3);
+            padding: 20px 15px;
+            border-left: 1px solid rgba(255,100,100,0.5);
+            z-index: 10;
+        }
+        #viscosity-indicator {
+            position: absolute;
+            bottom: 30px;
+            right: 30px;
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 14px;
+            letter-spacing: 0.1em;
+            background: rgba(0,0,0,0.5);
+            padding: 15px 20px;
+            border-radius: 25px;
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255,100,100,0.3);
+            opacity: 0;
+            transition: opacity 0.3s;
+        }
+        canvas {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">長く触れるほど溶ける</div>
+    <div id="viscosity-indicator">粘度: <span id="viscosity-value">0</span>%</div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        // シーン設定
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x0a0505);
+        
+        // カメラ設定
+        const camera = new THREE.PerspectiveCamera(
+            65,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+        );
+        camera.position.set(0, 12, 18);
+        camera.lookAt(0, 0, 0);
+        
+        // レンダラー設定
+        const renderer = new THREE.WebGLRenderer({ 
+            antialias: true,
+            alpha: true
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        document.body.appendChild(renderer.domElement);
+        
+        // 和風ライティング
+        const ambientLight = new THREE.AmbientLight(0x332222, 0.4);
+        scene.add(ambientLight);
+        
+        const mainLight = new THREE.DirectionalLight(0xfff5f0, 0.6);
+        mainLight.position.set(10, 20, 10);
+        mainLight.castShadow = true;
+        scene.add(mainLight);
+        
+        const rimLight = new THREE.DirectionalLight(0xff3344, 0.4);
+        rimLight.position.set(-5, 10, -10);
+        scene.add(rimLight);
+        
+        // 溶岩のような光
+        const lavaLight = new THREE.PointLight(0xff0000, 0, 15);
+        lavaLight.position.set(0, 3, 0);
+        scene.add(lavaLight);
+        
+        // 和風の床（黒漆のような質感）
+        const floorGeometry = new THREE.CircleGeometry(25, 64);
+        const floorMaterial = new THREE.MeshPhysicalMaterial({ 
+            color: 0x0a0505,
+            metalness: 0.8,
+            roughness: 0.2,
+            clearcoat: 1,
+            clearcoatRoughness: 0.1
+        });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.position.y = -2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+        
+        // 流体シェーダー
+        const fluidVertexShader = `
+            attribute float size;
+            attribute float viscosity;
+            attribute float temperature;
+            attribute float age;
+            
+            varying float vViscosity;
+            varying float vTemperature;
+            varying float vAge;
+            varying vec3 vPos;
+            
+            void main() {
+                vViscosity = viscosity;
+                vTemperature = temperature;
+                vAge = age;
+                vPos = position;
+                
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                float sizeMultiplier = 1.0 + viscosity * 2.0 + temperature * 0.5;
+                gl_PointSize = size * (500.0 / -mvPosition.z) * sizeMultiplier;
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `;
+        
+        const fluidFragmentShader = `
+            uniform float time;
+            uniform float globalViscosity;
+            
+            varying float vViscosity;
+            varying float vTemperature;
+            varying float vAge;
+            varying vec3 vPos;
+            
+            void main() {
+                vec2 center = gl_PointCoord - vec2(0.5);
+                float dist = length(center);
+                
+                // ドロドロした形状（粘度で変化）
+                float wobble = sin(time * 3.0 + vPos.x * 5.0) * vViscosity * 0.1;
+                float shape = smoothstep(0.5 + wobble, 0.0, dist);
+                shape = pow(shape, 0.6 - vViscosity * 0.3);
+                
+                // 温度による色の変化
+                vec3 coolColor = vec3(0.9, 0.2, 0.15); // 朱色
+                vec3 hotColor = vec3(1.0, 0.4, 0.0);   // オレンジ
+                vec3 lavaColor = vec3(1.0, 0.8, 0.2);  // 黄色
+                
+                vec3 color = mix(coolColor, hotColor, vTemperature);
+                color = mix(color, lavaColor, pow(vTemperature, 2.0));
+                
+                // 粘度による内部の輝き
+                float innerGlow = exp(-dist * (3.0 - vViscosity * 2.0)) * vViscosity;
+                color += vec3(1.0, 0.7, 0.3) * innerGlow;
+                
+                // エッジの発光
+                float edge = 1.0 - smoothstep(0.2, 0.5, dist);
+                color += vec3(1.0, 0.6, 0.4) * edge * (0.5 + vTemperature);
+                
+                // 透明度（粘度が高いほど不透明に）
+                float alpha = shape * (0.7 + globalViscosity * 0.3) * (1.0 - vAge * 0.2);
+                
+                gl_FragColor = vec4(color, alpha);
+            }
+        `;
+        
+        // 流体パーティクルシステム
+        const particleCount = 30000;
+        const particles = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const velocities = new Float32Array(particleCount * 3);
+        const sizes = new Float32Array(particleCount);
+        const viscosities = new Float32Array(particleCount);
+        const temperatures = new Float32Array(particleCount);
+        const ages = new Float32Array(particleCount);
+        const originalPositions = new Float32Array(particleCount * 3);
+        
+        // 水源の形状（より密集した初期配置）
+        for (let i = 0; i < particleCount; i++) {
+            const i3 = i * 3;
+            
+            // 密集した円形の水だまり
+            const angle = Math.random() * Math.PI * 2;
+            const radius = Math.pow(Math.random(), 0.5) * 2.5; // 中心に密集
+            
+            const x = radius * Math.cos(angle);
+            const z = radius * Math.sin(angle);
+            const y = (Math.random() - 0.5) * 0.3; // より薄い層
+            
+            positions[i3] = x;
+            positions[i3 + 1] = y;
+            positions[i3 + 2] = z;
+            
+            originalPositions[i3] = x;
+            originalPositions[i3 + 1] = y;
+            originalPositions[i3 + 2] = z;
+            
+            velocities[i3] = 0;
+            velocities[i3 + 1] = 0;
+            velocities[i3 + 2] = 0;
+            
+            sizes[i] = Math.random() * 0.6 + 0.4;
+            viscosities[i] = 0;
+            temperatures[i] = 0;
+            ages[i] = 0;
+        }
+        
+        particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        particles.setAttribute('size', new THREE.BufferAttribute(sizes, 1));
+        particles.setAttribute('viscosity', new THREE.BufferAttribute(viscosities, 1));
+        particles.setAttribute('temperature', new THREE.BufferAttribute(temperatures, 1));
+        particles.setAttribute('age', new THREE.BufferAttribute(ages, 1));
+        
+        // 流体マテリアル
+        const fluidMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                time: { value: 0 },
+                globalViscosity: { value: 0 }
+            },
+            vertexShader: fluidVertexShader,
+            fragmentShader: fluidFragmentShader,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+            transparent: true
+        });
+        
+        const fluidMesh = new THREE.Points(particles, fluidMaterial);
+        fluidMesh.position.y = 3;
+        scene.add(fluidMesh);
+        
+        // ドロドロメッシュ（粘性を視覚化）
+        const blobGeometry = new THREE.SphereGeometry(3, 32, 32);
+        const blobMaterial = new THREE.MeshPhysicalMaterial({
+            color: 0xff0000,
+            metalness: 0.3,
+            roughness: 0.3,
+            transmission: 0.5,
+            thickness: 2,
+            transparent: true,
+            opacity: 0.7,
+            emissive: 0xff0000,
+            emissiveIntensity: 0
+        });
+        const blobMesh = new THREE.Mesh(blobGeometry, blobMaterial);
+        blobMesh.position.y = 3;
+        blobMesh.castShadow = true;
+        scene.add(blobMesh);
+        
+        // 状態管理
+        let isFlowing = false;
+        let flowDuration = 0; // 押している時間
+        let globalViscosity = 0; // 全体の粘度
+        let meltingProgress = 0; // 溶解の進行度
+        let regenerating = false;
+        let regenerateTimer = 0;
+        
+        const viscosityIndicator = document.getElementById('viscosity-indicator');
+        const viscosityValue = document.getElementById('viscosity-value');
+        
+        // インタラクション
+        function startFlow(event) {
+            isFlowing = true;
+            flowDuration = 0;
+            regenerating = false;
+            regenerateTimer = 0;
+            viscosityIndicator.style.opacity = '1';
+        }
+        
+        function stopFlow() {
+            isFlowing = false;
+            viscosityIndicator.style.opacity = '0';
+        }
+        
+        renderer.domElement.addEventListener('mousedown', startFlow);
+        renderer.domElement.addEventListener('mouseup', stopFlow);
+        renderer.domElement.addEventListener('touchstart', startFlow);
+        renderer.domElement.addEventListener('touchend', stopFlow);
+        
+        // アニメーションループ
+        let time = 0;
+        function animate() {
+            requestAnimationFrame(animate);
+            
+            time += 0.016;
+            fluidMaterial.uniforms.time.value = time;
+            
+            const positions = particles.attributes.position.array;
+            const viscosities = particles.attributes.viscosity.array;
+            const temperatures = particles.attributes.temperature.array;
+            const ages = particles.attributes.age.array;
+            
+            // 押している時間を計測
+            if (isFlowing) {
+                flowDuration += 0.016;
+                // 長押しするほど粘度が上がる（最大1.0）
+                globalViscosity = Math.min(1.0, flowDuration / 5.0); // 5秒で最大
+                meltingProgress = globalViscosity;
+            } else {
+                // 離すとゆっくり粘度が下がる
+                globalViscosity *= 0.98;
+                flowDuration = 0;
+            }
+            
+            // 粘度表示の更新
+            viscosityValue.textContent = Math.round(globalViscosity * 100);
+            
+            // 自動再生
+            if (!isFlowing && meltingProgress > 0.9 && !regenerating) {
+                regenerateTimer++;
+                if (regenerateTimer > 90) {
+                    regenerating = true;
+                }
+            }
+            
+            if (regenerating) {
+                meltingProgress = Math.max(0, meltingProgress - 0.015);
+                globalViscosity = meltingProgress;
+                if (meltingProgress <= 0) {
+                    regenerating = false;
+                    regenerateTimer = 0;
+                }
+            }
+            
+            fluidMaterial.uniforms.globalViscosity.value = globalViscosity;
+            
+            // ブロブメッシュの変形（粘度に応じて）
+            const blobScale = 1 + globalViscosity * 0.5;
+            const blobDistortion = Math.sin(time * 2) * globalViscosity * 0.2;
+            blobMesh.scale.set(
+                blobScale + blobDistortion,
+                blobScale * (1 - globalViscosity * 0.7),
+                blobScale - blobDistortion
+            );
+            blobMesh.position.y = 3 - meltingProgress * 4;
+            blobMaterial.opacity = 0.7 - meltingProgress * 0.4;
+            blobMaterial.emissiveIntensity = globalViscosity * 0.5;
+            
+            // 溶岩ライトの強度
+            lavaLight.intensity = globalViscosity * 3;
+            
+            // パーティクルの更新
+            for (let i = 0; i < particleCount; i++) {
+                const i3 = i * 3;
+                
+                // 個別の粘度と温度を更新
+                viscosities[i] = globalViscosity * (0.8 + Math.random() * 0.2);
+                temperatures[i] = globalViscosity * (0.7 + Math.random() * 0.3);
+                
+                if (regenerating) {
+                    // 再生アニメーション
+                    const returnSpeed = 0.03;
+                    positions[i3] += (originalPositions[i3] - positions[i3]) * returnSpeed;
+                    positions[i3 + 1] += (originalPositions[i3 + 1] - positions[i3 + 1]) * returnSpeed;
+                    positions[i3 + 2] += (originalPositions[i3 + 2] - positions[i3 + 2]) * returnSpeed;
+                    
+                    velocities[i3] *= 0.85;
+                    velocities[i3 + 1] *= 0.85;
+                    velocities[i3 + 2] *= 0.85;
+                    
+                    ages[i] = Math.max(0, ages[i] - 0.02);
+                } else if (globalViscosity > 0.01) {
+                    // ドロドロに溶ける効果
+                    const centerX = positions[i3];
+                    const centerZ = positions[i3 + 2];
+                    const dist = Math.sqrt(centerX * centerX + centerZ * centerZ);
+                    
+                    // 粘度が高いほど遅い動き
+                    const flowSpeed = 0.05 * (1 - globalViscosity * 0.7);
+                    
+                    // 中心から外へのドロドロした流れ
+                    if (dist > 0.1) {
+                        // 粘度が高いほど不規則な動き
+                        const randomness = globalViscosity * 0.03;
+                        velocities[i3] += (centerX / dist) * flowSpeed + (Math.random() - 0.5) * randomness;
+                        velocities[i3 + 2] += (centerZ / dist) * flowSpeed + (Math.random() - 0.5) * randomness;
+                    }
+                    
+                    // 重力（粘度が高いほど遅い）
+                    velocities[i3 + 1] -= flowSpeed * 2;
+                    
+                    // 粘性のある渦巻き
+                    if (globalViscosity > 0.3) {
+                        const angle = Math.atan2(centerZ, centerX);
+                        const swirlForce = globalViscosity * 0.02;
+                        velocities[i3] += Math.cos(angle + Math.PI / 2) * swirlForce;
+                        velocities[i3 + 2] += Math.sin(angle + Math.PI / 2) * swirlForce;
+                    }
+                    
+                    // 表面張力（粘度が高いほど強い）
+                    if (dist < 3) {
+                        const tension = (3 - dist) / 3 * 0.02 * globalViscosity;
+                        velocities[i3] -= (centerX / dist) * tension;
+                        velocities[i3 + 2] -= (centerZ / dist) * tension;
+                    }
+                    
+                    ages[i] = Math.min(1, ages[i] + 0.005);
+                } else {
+                    // 静止時
+                    const returnSpeed = 0.02;
+                    positions[i3] += (originalPositions[i3] - positions[i3]) * returnSpeed;
+                    positions[i3 + 1] += (originalPositions[i3 + 1] - positions[i3 + 1]) * returnSpeed;
+                    positions[i3 + 2] += (originalPositions[i3 + 2] - positions[i3 + 2]) * returnSpeed;
+                    
+                    ages[i] = Math.max(0, ages[i] - 0.01);
+                }
+                
+                // 速度を適用（粘度で減衰）
+                const dampening = 1 - globalViscosity * 0.5;
+                positions[i3] += velocities[i3] * 0.1 * dampening;
+                positions[i3 + 1] += velocities[i3 + 1] * 0.1 * dampening;
+                positions[i3 + 2] += velocities[i3 + 2] * 0.1 * dampening;
+                
+                // 床との相互作用（粘度が高いほどゆっくり広がる）
+                if (positions[i3 + 1] + fluidMesh.position.y < -1.95) {
+                    positions[i3 + 1] = -1.95 - fluidMesh.position.y;
+                    velocities[i3 + 1] = 0;
+                    
+                    // ドロドロと広がる
+                    const spreadForce = 0.2 * (1 - globalViscosity * 0.8);
+                    velocities[i3] *= 0.5;
+                    velocities[i3 + 2] *= 0.5;
+                    
+                    if (Math.abs(velocities[i3]) < 0.05 && Math.abs(velocities[i3 + 2]) < 0.05) {
+                        const spreadAngle = Math.random() * Math.PI * 2;
+                        velocities[i3] = Math.cos(spreadAngle) * spreadForce;
+                        velocities[i3 + 2] = Math.sin(spreadAngle) * spreadForce;
+                    }
+                }
+                
+                // 境界チェック
+                const maxDist = 15;
+                const currentDist = Math.sqrt(positions[i3] ** 2 + positions[i3 + 2] ** 2);
+                if (currentDist > maxDist) {
+                    const scale = maxDist / currentDist;
+                    positions[i3] *= scale;
+                    positions[i3 + 2] *= scale;
+                    velocities[i3] *= 0.3;
+                    velocities[i3 + 2] *= 0.3;
+                }
+                
+                // 粘性抵抗（粘度が高いほど強い）
+                const resistance = 0.98 - globalViscosity * 0.08;
+                velocities[i3] *= resistance;
+                velocities[i3 + 1] *= resistance * 0.95;
+                velocities[i3 + 2] *= resistance;
+            }
+            
+            particles.attributes.position.needsUpdate = true;
+            particles.attributes.viscosity.needsUpdate = true;
+            particles.attributes.temperature.needsUpdate = true;
+            particles.attributes.age.needsUpdate = true;
+            
+            // カメラの動き（粘度で変化）
+            const cameraAngle = time * 0.05;
+            const cameraRadius = 18 + Math.sin(time * 0.1) * 2 - globalViscosity * 3;
+            camera.position.x = Math.sin(cameraAngle) * cameraRadius;
+            camera.position.z = Math.cos(cameraAngle) * cameraRadius;
+            camera.position.y = 12 + Math.sin(time * 0.08) * 2 - globalViscosity * 2;
+            camera.lookAt(0, 0, 0);
+            
+            renderer.render(scene, camera);
+        }
+        
+        // リサイズ対応
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+        
+        animate();
+    </script>
+</body>
+</html>
