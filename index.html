@@ -11,6 +11,7 @@
             overflow: hidden;
             background: #000;
             cursor: pointer;
+            touch-action: none; /* タッチ操作のデフォルト動作を無効化 */
             font-family: 'Courier New', monospace;
         }
         #info {
@@ -58,7 +59,10 @@
     </style>
 </head>
 <body>
-    <div id="info">WASD to move • Mouse to look • Click to lock cursor & start music • ESC to unlock</div>
+    <div id="info">
+        <span class="desktop-controls">WASD to move • Mouse to look • Click to lock cursor & start music • ESC to unlock</span>
+        <span class="mobile-controls" style="display:none;">Touch to move • Drag to look around • Tap to start music</span>
+    </div>
     <div id="intensity-indicator">Intensity: <span id="intensity-value">0</span>%</div>
     <div id="room-indicator">Room: <span id="room-value">1</span> | Position: <span id="position-value">0, 0</span></div>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
@@ -107,6 +111,12 @@
         let cameraRotationY = 0, cameraRotationX = 0;
         let isMouseDown = false;
         let mouseSensitivity = 0.002;
+        
+        // タッチ制御用
+        let touchStartX = 0, touchStartY = 0;
+        let isTouchDragging = false;
+        let lastTouchTime = 0;
+        let touchMoveVector = { x: 0, z: 0 };
         const patternVertexShader = `
             varying vec2 vUv;
             varying vec3 vPosition;
@@ -1426,6 +1436,15 @@
                 moveVector.add(right.clone().multiplyScalar(moveSpeed)); // 右移動
             }
             
+            // タッチ移動を追加（ドラッグ中でない場合のみ）
+            if (!isTouchDragging && (touchMoveVector.x !== 0 || touchMoveVector.z !== 0)) {
+                // タッチ位置からの相対的な移動方向を計算
+                const touchForward = forward.clone().multiplyScalar(-touchMoveVector.z);
+                const touchRight = right.clone().multiplyScalar(touchMoveVector.x);
+                moveVector.add(touchForward);
+                moveVector.add(touchRight);
+            }
+            
             let newX = camera.position.x + moveVector.x;
             let newZ = camera.position.z + moveVector.z;
             
@@ -1531,8 +1550,83 @@
         document.addEventListener('webkitpointerlockchange', onPointerLockChange, false);
         
         // タッチイベント
-        renderer.domElement.addEventListener('touchstart', startEffect);
-        renderer.domElement.addEventListener('touchend', stopEffect);
+        function onTouchStart(event) {
+            event.preventDefault();
+            
+            // 音楽開始
+            startAudio();
+            
+            if (event.touches.length === 1) {
+                const touch = event.touches[0];
+                touchStartX = touch.clientX;
+                touchStartY = touch.clientY;
+                lastTouchTime = Date.now();
+                
+                // タップ位置に基づいて移動方向を設定
+                const screenCenterX = window.innerWidth / 2;
+                const screenCenterY = window.innerHeight / 2;
+                const deltaX = touch.clientX - screenCenterX;
+                const deltaY = touch.clientY - screenCenterY;
+                
+                // 画面を9分割して移動方向を決定
+                const threshold = Math.min(window.innerWidth, window.innerHeight) * 0.2;
+                
+                if (Math.abs(deltaX) < threshold && Math.abs(deltaY) < threshold) {
+                    // 中央タップ：移動しない
+                    touchMoveVector.x = 0;
+                    touchMoveVector.z = 0;
+                } else {
+                    // タップ位置に応じて移動
+                    const angle = Math.atan2(deltaY, deltaX);
+                    touchMoveVector.x = Math.cos(angle) * moveSpeed;
+                    touchMoveVector.z = Math.sin(angle) * moveSpeed;
+                }
+                
+                startEffect(event);
+            }
+        }
+        
+        function onTouchMove(event) {
+            event.preventDefault();
+            
+            if (event.touches.length === 1) {
+                const touch = event.touches[0];
+                const currentTime = Date.now();
+                const deltaTime = currentTime - lastTouchTime;
+                
+                if (deltaTime > 50) { // 50ms以上経過したらドラッグとみなす
+                    isTouchDragging = true;
+                    touchMoveVector.x = 0;
+                    touchMoveVector.z = 0;
+                    
+                    // ドラッグで視点を回転
+                    const deltaX = touch.clientX - touchStartX;
+                    const deltaY = touch.clientY - touchStartY;
+                    
+                    cameraRotationY -= deltaX * mouseSensitivity * 2; // タッチは感度を上げる
+                    cameraRotationX -= deltaY * mouseSensitivity * 2;
+                    
+                    // 縦回転を制限
+                    cameraRotationX = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, cameraRotationX));
+                    
+                    touchStartX = touch.clientX;
+                    touchStartY = touch.clientY;
+                }
+            }
+        }
+        
+        function onTouchEnd(event) {
+            event.preventDefault();
+            isTouchDragging = false;
+            touchMoveVector.x = 0;
+            touchMoveVector.z = 0;
+            stopEffect();
+        }
+        
+        renderer.domElement.addEventListener('touchstart', onTouchStart);
+        renderer.domElement.addEventListener('touchmove', onTouchMove);
+        renderer.domElement.addEventListener('touchend', onTouchEnd);
+        renderer.domElement.addEventListener('touchcancel', onTouchEnd);
         
         // キーボードイベント
         document.addEventListener('keydown', (event) => {
@@ -1562,6 +1656,13 @@
         // 初期フォーカス
         window.addEventListener('load', () => {
             document.body.focus();
+            
+            // モバイルデバイスの検出とUI調整
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            if (isMobile) {
+                document.querySelector('.desktop-controls').style.display = 'none';
+                document.querySelector('.mobile-controls').style.display = 'inline';
+            }
         });
         
         function animate() {
