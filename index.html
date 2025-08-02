@@ -76,7 +76,7 @@
             0.1,
             1000
         );
-        camera.position.set(-20, 1.6, -12); // 最初の部屋に配置
+        camera.position.set(4, 1.6, 4); // 最初の部屋に配置（中央付近）
         
         const renderer = new THREE.WebGLRenderer({ 
             antialias: true,
@@ -88,21 +88,33 @@
         const roomSize = 10;
         const mazeSize = 5;
         
-        // 迷路マップ (1=壁, 0=通路, 2=部屋)
+        // 迷路マップ (1=壁, 0=通路, 2=部屋) - 最適化された巨大迷宮
         const mazeLayout = [
-            [1,1,1,1,1,1,1,1,1,1,1,1,1],
-            [1,2,0,2,0,1,0,2,0,1,0,2,1],
-            [1,0,1,0,1,0,1,0,1,0,1,0,1],
-            [1,2,0,2,0,0,0,2,0,0,0,2,1],
-            [1,0,1,0,1,1,1,0,1,1,1,0,1],
-            [1,2,0,2,0,0,0,2,0,0,0,2,1],
-            [1,0,1,0,1,0,1,0,1,0,1,0,1],
-            [1,2,0,2,0,1,0,2,0,1,0,2,1],
-            [1,1,1,1,1,1,1,1,1,1,1,1,1]
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1],
+            [1,2,0,2,0,1,0,2,0,1,0,2,0,1,0,2,0,1,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,2,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,1],
+            [1,0,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1],
+            [1,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,2,1],
+            [1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,0,1],
+            [1,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,2,1],
+            [1,0,1,1,1,0,1,0,1,0,1,0,1,0,1,1,1,0,1,0,1],
+            [1,2,0,2,0,1,0,2,0,1,0,2,0,1,0,2,0,1,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,2,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,1],
+            [1,0,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1,1,1,0,1],
+            [1,2,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,2,0,2,0,1,0,2,0,1,0,2,0,1,0,2,0,1,0,2,1],
+            [1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1,0,1],
+            [1,2,0,0,0,2,0,0,0,2,0,0,0,2,0,0,0,2,0,2,1],
+            [1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
         ];
         
         // プレイヤーの状態
-        let playerPos = { x: -20, z: -12 }; // 最初の部屋の位置
+        let playerPos = { x: 4, z: 4 }; // 最初の部屋の位置（中央付近の部屋）
         let currentRoom = 1;
         let rooms = new Map();
         
@@ -117,6 +129,7 @@
         let isTouchDragging = false;
         let lastTouchTime = 0;
         let touchMoveVector = { x: 0, z: 0 };
+        let isTouchMoving = false;
         const patternVertexShader = `
             varying vec2 vUv;
             varying vec3 vPosition;
@@ -473,11 +486,30 @@
             }
         `;
         
+        // マテリアルプール - 同じパターンのマテリアルを再利用
+        const materialPool = new Map();
+        const sharedUniforms = {
+            time: { value: 0 },
+            intensity: { value: 0 }
+        };
+        
+        function getMaterialKey(baseColor, roomTheme) {
+            return `${baseColor.r}_${baseColor.g}_${baseColor.b}_${roomTheme}`;
+        }
+        
         function createPatternMaterial(baseColor, roomTheme) {
-            return new THREE.ShaderMaterial({
+            const key = getMaterialKey(baseColor, roomTheme);
+            
+            // 既存のマテリアルがあれば再利用
+            if (materialPool.has(key)) {
+                return materialPool.get(key);
+            }
+            
+            // 新しいマテリアルを作成
+            const material = new THREE.ShaderMaterial({
                 uniforms: {
-                    time: { value: 0 },
-                    intensity: { value: 0 },
+                    time: sharedUniforms.time, // 共有uniform
+                    intensity: sharedUniforms.intensity, // 共有uniform
                     baseColor: { value: baseColor },
                     roomTheme: { value: roomTheme }
                 },
@@ -485,6 +517,9 @@
                 fragmentShader: patternFragmentShader,
                 side: THREE.DoubleSide
             });
+            
+            materialPool.set(key, material);
+            return material;
         }
         
         const cubeRenderTarget = new THREE.WebGLCubeRenderTarget(256);
@@ -509,35 +544,107 @@
         const mazeGroup = new THREE.Group();
         scene.add(mazeGroup);
         
-        function createRoom(x, z, theme) {
+        // 共有ジオメトリ - 同じ形状を再利用
+        const sharedFloorGeometry = new THREE.PlaneGeometry(cellSize, cellSize);
+        const sharedWallGeometry = new THREE.PlaneGeometry(cellSize, wallHeight);
+        const sharedBlockGeometry = new THREE.BoxGeometry(cellSize, wallHeight, cellSize);
+        
+        function createRoom(x, z, theme, mazeX, mazeZ, mazeData) {
             const roomGroup = new THREE.Group();
             
+            // 床と天井は純粋な黒のマテリアルを使用
+            const blackMaterial = new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide });
+            
             // 床
-            const floorGeometry = new THREE.PlaneGeometry(cellSize, cellSize);
-            const floorMaterial = createPatternMaterial(new THREE.Vector3(0.0, 0.0, 0.0), theme); // 黒色
-            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            const floor = new THREE.Mesh(sharedFloorGeometry, blackMaterial);
             floor.rotation.x = -Math.PI / 2;
             floor.position.set(x * cellSize, -wallHeight / 2, z * cellSize);
             roomGroup.add(floor);
             
-            // 天井
-            const ceilingMaterial = createPatternMaterial(new THREE.Vector3(0.0, 0.0, 0.0), theme); // 黒色
-            const ceiling = new THREE.Mesh(floorGeometry, ceilingMaterial);
+            // 天井（同じマテリアルを再利用）
+            const ceiling = new THREE.Mesh(sharedFloorGeometry, blackMaterial);
             ceiling.rotation.x = Math.PI / 2;
             ceiling.position.set(x * cellSize, wallHeight / 2, z * cellSize);
             roomGroup.add(ceiling);
             
+            // 壁を追加（部屋を立方体として認識できるように）
+            // 各部屋の4面に壁を追加（通路がある方向は開ける）
+            const wallColors = [
+                new THREE.Vector3(0.8, 0.3, 0.5),
+                new THREE.Vector3(0.3, 0.8, 0.5),
+                new THREE.Vector3(0.5, 0.3, 0.8),
+                new THREE.Vector3(0.8, 0.8, 0.3)
+            ];
+            
+            // 迷路データから隣接セルをチェック
+            const hasNorthOpening = mazeData && mazeZ > 0 && mazeData[mazeZ-1][mazeX] === 0;
+            const hasSouthOpening = mazeData && mazeZ < mazeData.length-1 && mazeData[mazeZ+1][mazeX] === 0;
+            const hasEastOpening = mazeData && mazeX < mazeData[0].length-1 && mazeData[mazeZ][mazeX+1] === 0;
+            const hasWestOpening = mazeData && mazeX > 0 && mazeData[mazeZ][mazeX-1] === 0;
+            
+            // 北壁（通路がなければ設置）
+            if (!hasNorthOpening) {
+                const northWall = new THREE.Mesh(
+                    sharedWallGeometry,
+                    createPatternMaterial(wallColors[0], theme)
+                );
+                northWall.position.set(x * cellSize, 0, (z - 0.5) * cellSize);
+                roomGroup.add(northWall);
+            }
+            
+            // 南壁（通路がなければ設置）
+            if (!hasSouthOpening) {
+                const southWall = new THREE.Mesh(
+                    sharedWallGeometry,
+                    createPatternMaterial(wallColors[1], theme)
+                );
+                southWall.position.set(x * cellSize, 0, (z + 0.5) * cellSize);
+                southWall.rotation.y = Math.PI;
+                roomGroup.add(southWall);
+            }
+            
+            // 東壁（通路がなければ設置）
+            if (!hasEastOpening) {
+                const eastWall = new THREE.Mesh(
+                    sharedWallGeometry,
+                    createPatternMaterial(wallColors[2], theme)
+                );
+                eastWall.position.set((x + 0.5) * cellSize, 0, z * cellSize);
+                eastWall.rotation.y = -Math.PI / 2;
+                roomGroup.add(eastWall);
+            }
+            
+            // 西壁（通路がなければ設置）
+            if (!hasWestOpening) {
+                const westWall = new THREE.Mesh(
+                    sharedWallGeometry,
+                    createPatternMaterial(wallColors[3], theme)
+                );
+                westWall.position.set((x - 0.5) * cellSize, 0, z * cellSize);
+                westWall.rotation.y = Math.PI / 2;
+                roomGroup.add(westWall);
+            }
             
             return roomGroup;
         }
         
         function createWall(x, z, direction) {
-            const wallGeometry = new THREE.PlaneGeometry(cellSize, wallHeight);
-            const wallMaterial = createPatternMaterial(
-                new THREE.Vector3(0.4 + Math.random() * 0.6, 0.3 + Math.random() * 0.7, 0.2 + Math.random() * 0.8), // 明るい色のみ
-                Math.floor(Math.random() * 4)
-            );
-            const wall = new THREE.Mesh(wallGeometry, wallMaterial);
+            // 位置に基づいて決定的な色とテーマを生成（同じ位置の壁は常に同じ見た目）
+            const seed = x * 1000 + z;
+            const colorIndex = Math.abs(seed) % 5;
+            const themeIndex = Math.abs(seed) % 4;
+            
+            // 事前定義された色パレット
+            const colors = [
+                new THREE.Vector3(0.6, 0.4, 0.8),
+                new THREE.Vector3(0.8, 0.6, 0.4),
+                new THREE.Vector3(0.4, 0.8, 0.6),
+                new THREE.Vector3(0.7, 0.5, 0.7),
+                new THREE.Vector3(0.5, 0.7, 0.8)
+            ];
+            
+            const wallMaterial = createPatternMaterial(colors[colorIndex], themeIndex);
+            const wall = new THREE.Mesh(sharedWallGeometry, wallMaterial);
             
             if (direction === 'north') {
                 wall.position.set(x * cellSize, 0, (z - 0.5) * cellSize);
@@ -558,7 +665,7 @@
         // エンドレス迷路のためのチャンク管理
         const chunkSize = mazeLayout[0].length;
         const loadedChunks = new Map();
-        const renderDistance = 2; // プレイヤーの周囲2チャンク分をロード
+        const renderDistance = 1; // プレイヤーの周囲1チャンク分をロード（パフォーマンス最適化）
         let roomCount = 1;
         
         function getChunkKey(chunkX, chunkZ) {
@@ -576,14 +683,25 @@
                     const worldZ = chunkZ * chunkSize + z - Math.floor(mazeLayout.length / 2);
                     
                     if (cell === 2) { // 部屋
-                        const room = createRoom(worldX, worldZ, (roomCount + chunkX + chunkZ) % 4);
+                        const room = createRoom(worldX, worldZ, (roomCount + chunkX + chunkZ) % 4, x, z, mazeLayout);
                         chunkGroup.add(room);
                         rooms.set(`${worldX},${worldZ}`, roomCount);
                         roomCount++;
                     } else if (cell === 1) { // 壁
+                        // 位置に基づいて決定的なマテリアルを選択
+                        const wallSeed = (worldX + chunkX * 100) * 1000 + (worldZ + chunkZ * 100);
+                        const wallColorIndex = Math.abs(wallSeed) % 3;
+                        const wallThemeIndex = Math.abs(wallSeed) % 4;
+                        
+                        const wallColors = [
+                            new THREE.Vector3(0.3, 0.2, 0.4),
+                            new THREE.Vector3(0.4, 0.3, 0.5),
+                            new THREE.Vector3(0.5, 0.2, 0.3)
+                        ];
+                        
                         const wallBlock = new THREE.Mesh(
-                            new THREE.BoxGeometry(cellSize, wallHeight, cellSize),
-                            createPatternMaterial(new THREE.Vector3(0.3, 0.2, 0.4), Math.random() * 4)
+                            sharedBlockGeometry,
+                            createPatternMaterial(wallColors[wallColorIndex], wallThemeIndex)
                         );
                         wallBlock.position.set(worldX * cellSize, 0, worldZ * cellSize);
                         chunkGroup.add(wallBlock);
@@ -1437,9 +1555,9 @@
             }
             
             // タッチ移動を追加（ドラッグ中でない場合のみ）
-            if (!isTouchDragging && (touchMoveVector.x !== 0 || touchMoveVector.z !== 0)) {
+            if (!isTouchDragging && isTouchMoving) {
                 // タッチ位置からの相対的な移動方向を計算
-                const touchForward = forward.clone().multiplyScalar(-touchMoveVector.z);
+                const touchForward = forward.clone().multiplyScalar(touchMoveVector.z);
                 const touchRight = right.clone().multiplyScalar(touchMoveVector.x);
                 moveVector.add(touchForward);
                 moveVector.add(touchRight);
@@ -1561,25 +1679,35 @@
                 touchStartX = touch.clientX;
                 touchStartY = touch.clientY;
                 lastTouchTime = Date.now();
+                isTouchMoving = true;
                 
                 // タップ位置に基づいて移動方向を設定
                 const screenCenterX = window.innerWidth / 2;
                 const screenCenterY = window.innerHeight / 2;
-                const deltaX = touch.clientX - screenCenterX;
-                const deltaY = touch.clientY - screenCenterY;
+                const screenHeight = window.innerHeight;
+                const screenWidth = window.innerWidth;
                 
-                // 画面を9分割して移動方向を決定
-                const threshold = Math.min(window.innerWidth, window.innerHeight) * 0.2;
-                
-                if (Math.abs(deltaX) < threshold && Math.abs(deltaY) < threshold) {
-                    // 中央タップ：移動しない
+                // 画面の上半分・下半分・左右で判定
+                if (touch.clientY < screenHeight * 0.4) {
+                    // 上部タップ：前進
                     touchMoveVector.x = 0;
+                    touchMoveVector.z = moveSpeed;
+                } else if (touch.clientY > screenHeight * 0.6) {
+                    // 下部タップ：後退
+                    touchMoveVector.x = 0;
+                    touchMoveVector.z = -moveSpeed;
+                } else if (touch.clientX < screenWidth * 0.3) {
+                    // 左側タップ：左移動
+                    touchMoveVector.x = -moveSpeed;
+                    touchMoveVector.z = 0;
+                } else if (touch.clientX > screenWidth * 0.7) {
+                    // 右側タップ：右移動
+                    touchMoveVector.x = moveSpeed;
                     touchMoveVector.z = 0;
                 } else {
-                    // タップ位置に応じて移動
-                    const angle = Math.atan2(deltaY, deltaX);
-                    touchMoveVector.x = Math.cos(angle) * moveSpeed;
-                    touchMoveVector.z = Math.sin(angle) * moveSpeed;
+                    // 中央タップ：前進
+                    touchMoveVector.x = 0;
+                    touchMoveVector.z = moveSpeed;
                 }
                 
                 startEffect(event);
@@ -1594,8 +1722,15 @@
                 const currentTime = Date.now();
                 const deltaTime = currentTime - lastTouchTime;
                 
-                if (deltaTime > 50) { // 50ms以上経過したらドラッグとみなす
+                // ドラッグ距離を計算
+                const dragDistance = Math.sqrt(
+                    Math.pow(touch.clientX - touchStartX, 2) + 
+                    Math.pow(touch.clientY - touchStartY, 2)
+                );
+                
+                if (dragDistance > 30) { // 30ピクセル以上動いたらドラッグとみなす
                     isTouchDragging = true;
+                    isTouchMoving = false;
                     touchMoveVector.x = 0;
                     touchMoveVector.z = 0;
                     
@@ -1618,6 +1753,7 @@
         function onTouchEnd(event) {
             event.preventDefault();
             isTouchDragging = false;
+            isTouchMoving = false;
             touchMoveVector.x = 0;
             touchMoveVector.z = 0;
             stopEffect();
@@ -1681,13 +1817,9 @@
             
             intensityValue.textContent = Math.round(intensity * 100);
             
-            // 迷路内のすべてのマテリアルを更新
-            mazeGroup.traverse((child) => {
-                if (child.material && child.material.uniforms) {
-                    child.material.uniforms.time.value = time;
-                    child.material.uniforms.intensity.value = intensity;
-                }
-            });
+            // 共有uniformsを更新（すべてのマテリアルが自動的に更新される）
+            sharedUniforms.time.value = time;
+            sharedUniforms.intensity.value = intensity;
             
             
             coloredLights.forEach((light, index) => {
