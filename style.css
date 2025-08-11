@@ -1,0 +1,51 @@
+body {
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    background: #000;
+    cursor: pointer;
+    touch-action: none; /* タッチ操作のデフォルト動作を無効化 */
+    font-family: 'Courier New', monospace;
+}
+#info {
+    position: absolute;
+    top: 20px;
+    left: 20px;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 14px;
+    background: rgba(0,0,0,0.7);
+    padding: 10px 15px;
+    border-radius: 5px;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.2);
+    z-index: 10;
+}
+#intensity-indicator {
+    position: absolute;
+    bottom: 20px;
+    right: 20px;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px;
+    background: rgba(0,0,0,0.7);
+    padding: 10px 15px;
+    border-radius: 5px;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.2);
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+#room-indicator {
+    position: absolute;
+    bottom: 20px;
+    left: 20px;
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 12px;
+    background: rgba(0,0,0,0.7);
+    padding: 10px 15px;
+    border-radius: 5px;
+    backdrop-filter: blur(10px);
+    border: 1px solid rgba(255,255,255,0.2);
+}
+canvas {
+    display: block;
+}
