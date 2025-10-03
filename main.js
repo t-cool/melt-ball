@@ -1445,8 +1445,17 @@
             KeyW: false,
             KeyS: false,
             KeyA: false,
-            KeyD: false
+            KeyD: false,
+            ShiftLeft: false,
+            ShiftRight: false,
+            Space: false
         };
+
+        // 飛行機能の状態管理
+        let isFlying = false;
+        let flyVelocityY = 0;
+        let lastShiftTap = 0;
+        const doubleTapThreshold = 300; // ミリ秒
         
         function isWalkable(x, z) {
             const mapX = Math.round(x / cellSize) + Math.floor(mazeLayout[0].length / 2);
@@ -1463,20 +1472,33 @@
             // カメラの前方向ベクトルを計算
             const forward = new THREE.Vector3(0, 0, -1); // Three.jsのデフォルト前方向
             const right = new THREE.Vector3(1, 0, 0);    // Three.jsのデフォルト右方向
-            
+
             // カメラのY軸回転を適用
             forward.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraRotationY);
             right.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraRotationY);
-            
+
+            // 飛行中は視線方向への移動を可能にする
+            const lookForward = new THREE.Vector3(0, 0, -1);
+            lookForward.applyAxisAngle(new THREE.Vector3(0, 1, 0), cameraRotationY);
+            lookForward.applyAxisAngle(new THREE.Vector3(1, 0, 0), cameraRotationX);
+
             // 移動ベクトルを初期化
             let moveVector = new THREE.Vector3(0, 0, 0);
-            
+
             // キー入力に応じて移動ベクトルを計算
             if (keys.ArrowUp || keys.KeyW) {
-                moveVector.add(forward.clone().multiplyScalar(moveSpeed)); // 前進
+                if (isFlying) {
+                    moveVector.add(lookForward.clone().multiplyScalar(moveSpeed)); // 飛行中は視線方向に前進
+                } else {
+                    moveVector.add(forward.clone().multiplyScalar(moveSpeed)); // 前進
+                }
             }
             if (keys.ArrowDown || keys.KeyS) {
-                moveVector.add(forward.clone().multiplyScalar(-moveSpeed)); // 後退
+                if (isFlying) {
+                    moveVector.add(lookForward.clone().multiplyScalar(-moveSpeed)); // 飛行中は視線方向に後退
+                } else {
+                    moveVector.add(forward.clone().multiplyScalar(-moveSpeed)); // 後退
+                }
             }
             if (keys.ArrowLeft || keys.KeyA) {
                 moveVector.add(right.clone().multiplyScalar(-moveSpeed)); // 左移動
@@ -1484,7 +1506,19 @@
             if (keys.ArrowRight || keys.KeyD) {
                 moveVector.add(right.clone().multiplyScalar(moveSpeed)); // 右移動
             }
-            
+
+            // 飛行中の垂直移動
+            if (isFlying) {
+                if (keys.Space) {
+                    flyVelocityY = moveSpeed; // スペースで上昇
+                } else if (keys.ShiftLeft || keys.ShiftRight) {
+                    flyVelocityY = -moveSpeed; // Shiftで下降
+                } else {
+                    flyVelocityY *= 0.95; // 減速
+                }
+                moveVector.y = flyVelocityY;
+            }
+
             // タッチ移動を追加（ドラッグ中でない場合のみ）
             if (!isTouchDragging && isTouchMoving) {
                 // タッチ位置からの相対的な移動方向を計算
@@ -1493,29 +1527,49 @@
                 moveVector.add(touchForward);
                 moveVector.add(touchRight);
             }
-            
-            let newX = camera.position.x + moveVector.x;
-            let newZ = camera.position.z + moveVector.z;
-            
-            // コリジョン検出（より細かく）
-            const buffer = 1.5; // 壁との距離バッファ
-            if (isWalkable(newX, camera.position.z)) {
-                const nextMapX = Math.round(newX / cellSize) + Math.floor(mazeLayout[0].length / 2);
-                const currentMapZ = Math.round(camera.position.z / cellSize) + Math.floor(mazeLayout.length / 2);
-                
-                if (nextMapX >= 0 && nextMapX < mazeLayout[0].length && 
-                    currentMapZ >= 0 && currentMapZ < mazeLayout.length) {
-                    camera.position.x = newX;
+
+            // 飛行中は衝突判定を無視
+            if (isFlying) {
+                camera.position.x += moveVector.x;
+                camera.position.y += moveVector.y;
+                camera.position.z += moveVector.z;
+                isCollidingX = false;
+                isCollidingZ = false;
+            } else {
+                let newX = camera.position.x + moveVector.x;
+                let newZ = camera.position.z + moveVector.z;
+
+                // コリジョン検出（より細かく）
+                const buffer = 1.5; // 壁との距離バッファ
+                isCollidingX = false;
+                isCollidingZ = false;
+
+                if (isWalkable(newX, camera.position.z)) {
+                    const nextMapX = Math.round(newX / cellSize) + Math.floor(mazeLayout[0].length / 2);
+                    const currentMapZ = Math.round(camera.position.z / cellSize) + Math.floor(mazeLayout.length / 2);
+
+                    if (nextMapX >= 0 && nextMapX < mazeLayout[0].length &&
+                        currentMapZ >= 0 && currentMapZ < mazeLayout.length) {
+                        camera.position.x = newX;
+                    } else {
+                        isCollidingX = true;
+                    }
+                } else {
+                    isCollidingX = true;
                 }
-            }
-            
-            if (isWalkable(camera.position.x, newZ)) {
-                const currentMapX = Math.round(camera.position.x / cellSize) + Math.floor(mazeLayout[0].length / 2);
-                const nextMapZ = Math.round(newZ / cellSize) + Math.floor(mazeLayout.length / 2);
-                
-                if (nextMapZ >= 0 && nextMapZ < mazeLayout.length && 
-                    currentMapX >= 0 && currentMapX < mazeLayout[0].length) {
-                    camera.position.z = newZ;
+
+                if (isWalkable(camera.position.x, newZ)) {
+                    const currentMapX = Math.round(camera.position.x / cellSize) + Math.floor(mazeLayout[0].length / 2);
+                    const nextMapZ = Math.round(newZ / cellSize) + Math.floor(mazeLayout.length / 2);
+
+                    if (nextMapZ >= 0 && nextMapZ < mazeLayout.length &&
+                        currentMapX >= 0 && currentMapX < mazeLayout[0].length) {
+                        camera.position.z = newZ;
+                    } else {
+                        isCollidingZ = true;
+                    }
+                } else {
+                    isCollidingZ = true;
                 }
             }
             
@@ -1700,8 +1754,23 @@
             if (keys.hasOwnProperty(event.code)) {
                 keys[event.code] = true;
                 event.preventDefault();
+
+                // Shiftキーのダブルタップ検出
+                if (event.code === 'ShiftLeft' || event.code === 'ShiftRight') {
+                    const currentTime = Date.now();
+                    if (currentTime - lastShiftTap < doubleTapThreshold) {
+                        isFlying = !isFlying; // 飛行モードの切り替え
+                        if (!isFlying) {
+                            // 飛行モードを解除した時は地面の高さに戻す
+                            camera.position.y = 1.6;
+                            flyVelocityY = 0;
+                        }
+                        console.log('飛行モード:', isFlying ? 'ON' : 'OFF');
+                    }
+                    lastShiftTap = currentTime;
+                }
             }
-            
+
             // ESCでポインターロック解除
             if (event.code === 'Escape') {
                 document.exitPointerLock();
@@ -1773,14 +1842,14 @@
             camera.rotation.y = cameraRotationY;
             camera.rotation.x = cameraRotationX;
             
-            // カメラの微細な揺れ（移動中は無効）
-            const hasMovement = keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight || 
+            // カメラの微細な揺れ（移動中は無効、飛行中も考慮）
+            const hasMovement = keys.ArrowUp || keys.ArrowDown || keys.ArrowLeft || keys.ArrowRight ||
                                keys.KeyW || keys.KeyS || keys.KeyA || keys.KeyD;
-            if (!hasMovement && !document.pointerLockElement) {
+            if (!isFlying && !hasMovement && !document.pointerLockElement) {
                 camera.position.y = 1.6 + Math.sin(time * 0.15) * 0.05 * intensity;
                 camera.rotation.y += Math.sin(time * 0.05) * 0.002 * intensity;
                 camera.rotation.x += Math.cos(time * 0.07) * 0.001 * intensity;
-            } else {
+            } else if (!isFlying && !hasMovement) {
                 camera.position.y = 1.6;
             }
             
